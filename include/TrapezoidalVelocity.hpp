@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
-#include <FastAccelStepper.h>
 
 constexpr double kMaxDuration = 2000.0;
 constexpr double kMinAcceleration = 1e-12;
