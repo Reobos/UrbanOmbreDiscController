@@ -29,6 +29,11 @@ static TrapezoidalVelocity velocity_profile = {};
 // Mutex protecting velocity profile access
 static SemaphoreHandle_t traj_mutex = nullptr;
 
+// Analog read pin for frequency
+constexpr int kSpeedPin = 34;
+constexpr double kSpeedMin = 0.0;
+constexpr double kSpeedMax = 540.0;
+
 // 60 Hz control task (pinned to core 0 on ESP32)
 static void control_task(void* /*unused*/) {
    // Use vTaskDelayUntil for consistent cadence.
@@ -57,6 +62,8 @@ void setup() {
 
    Serial.begin(115200);
    delay(50);
+
+   pinMode(kSpeedPin, INPUT);
 
    stepper.begin();
 
@@ -103,24 +110,16 @@ void setup() {
 }
 
 void loop() {
-   delay(1000);
+   delay(200);
+   // Read Pots
+   const long read_val = constrain(analogRead(kSpeedPin), 10, 4000);
+   const long speed_cmd = map(read_val, 10, 4000, kSpeedMin, kSpeedMax);
    if (xSemaphoreTake(traj_mutex, portMAX_DELAY) == pdTRUE) {
-      velocity_profile.reset(micros(), 0.0);
+      velocity_profile.set_target(micros(), speed_cmd, 500.0);
       xSemaphoreGive(traj_mutex);
    }
-   delay(1000);
-   if (xSemaphoreTake(traj_mutex, portMAX_DELAY) == pdTRUE) {
-      velocity_profile.set_target(micros(), 360.0, 500.0);
-      xSemaphoreGive(traj_mutex);
-   }
-   delay(1000);
-   if (xSemaphoreTake(traj_mutex, portMAX_DELAY) == pdTRUE) {
-      velocity_profile.set_target(micros(), 0.0, 250.0);
-      xSemaphoreGive(traj_mutex);
-   }
-   delay(600);
-   if (xSemaphoreTake(traj_mutex, portMAX_DELAY) == pdTRUE) {
-      velocity_profile.set_target(micros(), 0.0);
-      xSemaphoreGive(traj_mutex);
-   }
+   Serial.print("Speed cmd [analog, deg/s]: ");
+   Serial.print(read_val);
+   Serial.print(", ");
+   Serial.println(speed_cmd);
 }
