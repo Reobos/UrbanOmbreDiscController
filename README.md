@@ -2,6 +2,19 @@
 
 ##
 
+## ESP-NOW Velocity Commands
+
+The controller can accept velocity setpoints over ESP-NOW (ESP32 only). On boot it prints its STA MAC address; use that on the sender side.
+
+- Packet must be exactly 20 bytes (little-endian):
+	- `uint32_t magic` = `0x56454C43` (ASCII `VELC`)
+	- `uint16_t version` = `1`
+	- `uint16_t reserved` (ignored)
+	- `float velocity_deg_s`
+	- `float acceleration_deg_s2`
+	- `uint32_t seq`
+- If no valid packet is received for ~1s, the controller commands `0 deg/s`.
+
 ## Motor Configuration
 
 Gold motor register values:
