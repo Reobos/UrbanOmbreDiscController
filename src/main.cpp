@@ -35,6 +35,18 @@ static SemaphoreHandle_t traj_mutex = nullptr;
 
 namespace {
 
+static void print_sta_mac() {
+   // MAC reads as 00:00:00:00:00:00 if WiFi isn't initialized yet.
+   WiFi.mode(WIFI_STA);
+   delay(10);
+
+   uint8_t mac[6] = {0};
+   WiFi.macAddress(mac);
+
+   Serial.print("ESP32 STA MAC: ");
+   Serial.printf("%02X:%02X:%02X:%02X:%02X:%02X\n", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+}
+
 // Simple ESP-NOW packet format for velocity commands.
 // Sender must send exactly sizeof(EspNowVelocityCmd) bytes.
 struct EspNowVelocityCmd {
@@ -52,6 +64,10 @@ constexpr uint16_t kEspNowVersion = 1;
 // If no command received within this window, we command 0 velocity.
 constexpr uint32_t kCmdTimeoutMs = 1000;
 
+// ESP-NOW requires both devices to be on the same WiFi channel.
+// If either device ever connects to an AP, the channel can change, so we lock it.
+constexpr uint8_t kEspNowChannel = 1;
+
 portMUX_TYPE g_cmd_mux = portMUX_INITIALIZER_UNLOCKED;
 volatile EspNowVelocityCmd g_last_cmd = {
    .magic = kEspNowMagic,
@@ -62,6 +78,7 @@ volatile EspNowVelocityCmd g_last_cmd = {
    .seq = 0,
 };
 volatile uint32_t g_last_cmd_rx_ms = 0;
+volatile uint32_t g_rx_count = 0;
 
 static void on_espnow_recv(const esp_now_recv_info_t* /*recv_info*/, const uint8_t* data, int len) {
    if (data == nullptr || len != static_cast<int>(sizeof(EspNowVelocityCmd))) {
@@ -77,12 +94,22 @@ static void on_espnow_recv(const esp_now_recv_info_t* /*recv_info*/, const uint8
    portENTER_CRITICAL_ISR(&g_cmd_mux);
    memcpy((void*)&g_last_cmd, &cmd, sizeof(cmd));
    g_last_cmd_rx_ms = millis();
+   g_rx_count = g_rx_count + 1;
    portEXIT_CRITICAL_ISR(&g_cmd_mux);
 }
 
 static bool espnow_begin() {
    WiFi.mode(WIFI_STA);
-   WiFi.disconnect(true, true);
+   // Keep WiFi enabled; just ensure we are not associated.
+   WiFi.disconnect(false, true);
+
+   // Improves ESP-NOW reliability on some boards.
+   (void)esp_wifi_set_ps(WIFI_PS_NONE);
+
+   // Lock channel so TX/RX match.
+   (void)esp_wifi_set_promiscuous(true);
+   (void)esp_wifi_set_channel(kEspNowChannel, WIFI_SECOND_CHAN_NONE);
+   (void)esp_wifi_set_promiscuous(false);
 
    // Optional: if you want to lock channel, uncomment and set a channel that matches the sender.
    // constexpr uint8_t kChannel = 1;
@@ -164,15 +191,19 @@ void setup() {
    }
 
    {
-      uint8_t mac[6] = {0};
-      WiFi.macAddress(mac);
-      Serial.print("ESP32 STA MAC: ");
-      Serial.printf("%02X:%02X:%02X:%02X:%02X:%02X\n", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+      print_sta_mac();
 
       if (!espnow_begin()) {
          Serial.println("ESP-NOW init failed (velocity cmds disabled)");
       } else {
          Serial.println("ESP-NOW receiver ready");
+
+         uint8_t primary = 0;
+         wifi_second_chan_t second = WIFI_SECOND_CHAN_NONE;
+         if (esp_wifi_get_channel(&primary, &second) == ESP_OK) {
+            Serial.print("WiFi channel (locked): ");
+            Serial.println(primary);
+         }
       }
    }
 
@@ -216,4 +247,16 @@ void loop() {
    Serial.print(velocity_cmd_deg_s);
    Serial.print(", ");
    Serial.println(age_ms);
+
+   static uint32_t next_diag_ms = 0;
+   const uint32_t now_ms = millis();
+   if (static_cast<int32_t>(now_ms - next_diag_ms) >= 0) {
+      next_diag_ms = now_ms + 1000;
+      uint32_t rx_count = 0;
+      portENTER_CRITICAL(&g_cmd_mux);
+      rx_count = g_rx_count;
+      portEXIT_CRITICAL(&g_cmd_mux);
+      Serial.print("ESP-NOW rx packets: ");
+      Serial.println(rx_count);
+   }
 }
